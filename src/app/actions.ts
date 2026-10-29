@@ -5,7 +5,8 @@ import { revalidatePath } from "next/cache";
 import { db } from "@/lib/db";
 import { callAI } from "@/lib/ai";
 import { fetchReadableText, normalizeUrl, parseUrl } from "@/lib/extract";
-import { parseProfileContent, type ProfileContent, type TailoredCv } from "@/lib/profile";
+import { parseProfileContent, profileForPrompt, type ProfileContent, type TailoredCv } from "@/lib/profile";
+import { verifiedSummary } from "@/lib/summary-check";
 import { ApplyMethod } from "@/generated/prisma/enums";
 
 export type FormState = { error?: string; ok?: string };
@@ -149,12 +150,16 @@ export async function tailorCv(jobId: string): Promise<FormState> {
   const content = parseProfileContent(profile.content);
 
   try {
+    const jobContext = `JOB: ${job.title} at ${job.company}\nKey requirements: ${JSON.stringify(job.keyRequirements ?? [])}`;
     const result = await callAI<TailorResult>(
       TAILOR_SYSTEM,
-      `MASTER PROFILE:\n${profileForPrompt(profile, true)}\n\nJOB: ${job.title} at ${job.company}\nKey requirements: ${JSON.stringify(job.keyRequirements ?? [])}\n\nJOB POSTING:\n${job.rawText.slice(0, MAX_JOB_CHARS)}`,
-      6000,
+      `MASTER PROFILE:\n${profileForPrompt(profile, true)}\n\n${jobContext}\n\nJOB POSTING:\n${job.rawText.slice(0, MAX_JOB_CHARS)}`,
+      { maxTokens: 6000 },
     );
-    const tailoredCv = enforceProfileBounds(result, content);
+    const tailoredCv = {
+      ...enforceProfileBounds(result, content),
+      ...(await verifiedSummary(String(result.summary ?? ""), profile, jobContext)),
+    };
 
     await db.$transaction([
       db.application.upsert({
@@ -177,7 +182,10 @@ export async function tailorCv(jobId: string): Promise<FormState> {
  * Backstop for the no-fabrication rule: employers, titles, dates, and project
  * names are copied from the profile by index, and skills not in the profile are dropped.
  */
-function enforceProfileBounds(result: TailorResult, content: ProfileContent): TailoredCv {
+function enforceProfileBounds(
+  result: TailorResult,
+  content: ProfileContent,
+): Pick<TailoredCv, "experience" | "projects" | "skills"> {
   // Keep only entries pointing at a real profile index, first occurrence wins.
   const pick = <T extends { sourceIndex: number }>(items: T[] | undefined, sourceLength: number) => {
     const seen = new Set<number>();
@@ -212,27 +220,7 @@ function enforceProfileBounds(result: TailorResult, content: ProfileContent): Ta
     ),
   ];
 
-  return { summary: String(result.summary ?? ""), experience, projects, skills };
-}
-
-function profileForPrompt(
-  profile: { fullName: string; location: string | null; summary: string | null; content: unknown },
-  indexed = false,
-): string {
-  const c = parseProfileContent(profile.content);
-  const withIndex = <T,>(items: T[]) => (indexed ? items.map((item, i) => ({ index: i, ...item })) : items);
-  return JSON.stringify(
-    {
-      name: profile.fullName,
-      location: profile.location,
-      summary: profile.summary,
-      ...c,
-      experience: withIndex(c.experience),
-      projects: withIndex(c.projects),
-    },
-    null,
-    1,
-  );
+  return { experience, projects, skills };
 }
 
 export async function saveProfile(_prev: FormState, formData: FormData): Promise<FormState> {

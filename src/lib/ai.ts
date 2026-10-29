@@ -1,7 +1,12 @@
 import "server-only";
 
 const OPENROUTER_URL = "https://openrouter.ai/api/v1/chat/completions";
-const MODEL = "anthropic/claude-sonnet-4.5";
+export const MODELS = {
+  /** Extraction, scoring, tailoring. */
+  main: "anthropic/claude-sonnet-4.5",
+  /** Cheap verification passes. */
+  fast: "anthropic/claude-haiku-4.5",
+} as const;
 
 export class AIError extends Error {}
 
@@ -16,7 +21,11 @@ function extractJson(text: string): string {
 }
 
 /** Single entry point for every model call. Returns parsed JSON. */
-export async function callAI<T>(system: string, user: string, maxTokens = 4000): Promise<T> {
+export async function callAI<T>(
+  system: string,
+  user: string,
+  { model = MODELS.main, maxTokens = 4000 }: { model?: string; maxTokens?: number } = {},
+): Promise<T> {
   const apiKey = process.env.OPENROUTER_API_KEY;
   if (!apiKey) throw new AIError("OPENROUTER_API_KEY is not set");
 
@@ -30,7 +39,7 @@ export async function callAI<T>(system: string, user: string, maxTokens = 4000):
         "X-Title": "jobflow",
       },
       body: JSON.stringify({
-        model: MODEL,
+        model,
         max_tokens: maxTokens,
         temperature: 0.2,
         messages: [

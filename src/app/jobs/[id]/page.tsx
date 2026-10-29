@@ -107,11 +107,30 @@ function Section({ title, children }: { title: string; children: React.ReactNode
   );
 }
 
+function SummaryNote({ cv }: { cv: TailoredCv }) {
+  if (!cv.summarySource || cv.summarySource === "tailored") return null;
+  const text =
+    cv.summarySource === "regenerated"
+      ? "أُعيدت كتابة الملخص بعد رصد ادعاءات غير موجودة في ملفك."
+      : "تعذّر إنتاج ملخص مطابق لملفك، فاستُخدم ملخصك الأصلي كما هو.";
+  return (
+    <details dir="rtl" className="text-xs text-amber-400/90">
+      <summary className="cursor-pointer">{text}</summary>
+      <ul className="mt-1 list-disc space-y-0.5 ps-5 text-zinc-400" dir="auto">
+        {cv.summaryFlags?.map((f, i) => <li key={i}>{f}</li>)}
+      </ul>
+    </details>
+  );
+}
+
 /** The CV keeps the profile's own language and direction, independent of the Arabic UI. */
 function CvPreview({ cv }: { cv: TailoredCv }) {
   return (
     <div className="space-y-5 border-t border-zinc-800 pt-4 text-sm text-zinc-200" dir="auto">
-      <p className="leading-6">{cv.summary}</p>
+      <div className="space-y-1.5">
+        <p className="leading-6">{cv.summary}</p>
+        <SummaryNote cv={cv} />
+      </div>
 
       {cv.experience.length > 0 && (
         <div className="space-y-3">

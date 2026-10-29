@@ -26,6 +26,10 @@ export type ProfileContent = {
 
 export type TailoredCv = {
   summary: string;
+  /** tailored: passed the check; regenerated: passed after one rewrite; profile: fell back to the profile summary. */
+  summarySource?: "tailored" | "regenerated" | "profile";
+  /** Claims flagged by the summary check (those that triggered the rewrite, or that remained on fallback). */
+  summaryFlags?: string[];
   experience: Experience[];
   projects: Project[];
   skills: string[];
@@ -52,3 +56,25 @@ export function parseProfileContent(value: unknown): ProfileContent {
     languages: Array.isArray(v.languages) ? v.languages : [],
   };
 }
+
+/** Profile as JSON for prompts; `indexed` adds the positions tailoring selects by. */
+export function profileForPrompt(
+  profile: { fullName: string; location: string | null; summary: string | null; content: unknown },
+  indexed = false,
+): string {
+  const c = parseProfileContent(profile.content);
+  const withIndex = <T extends object>(items: T[]) => (indexed ? items.map((item, i) => ({ index: i, ...item })) : items);
+  return JSON.stringify(
+    {
+      name: profile.fullName,
+      location: profile.location,
+      summary: profile.summary,
+      ...c,
+      experience: withIndex(c.experience),
+      projects: withIndex(c.projects),
+    },
+    null,
+    1,
+  );
+}
+
