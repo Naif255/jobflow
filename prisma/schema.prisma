@@ -1,0 +1,111 @@
+generator client {
+  provider = "prisma-client"
+  output   = "../src/generated/prisma"
+}
+
+datasource db {
+  provider = "postgresql"
+}
+
+/// Single-row table holding the candidate's canonical profile. Everything the
+/// AI writes about the candidate must be traceable back to this row.
+model MasterProfile {
+  id          String   @id @default(cuid())
+  fullName    String
+  email       String
+  phone       String?
+  location    String?
+  linkedinUrl String?
+  summary     String?
+  /// { education[], experience[], projects[], skills[], certifications[], languages[] }
+  content     Json
+  updatedAt   DateTime @updatedAt
+}
+
+enum JobSource {
+  PASTED
+  ALERT
+}
+
+enum ApplyMethod {
+  EMAIL
+  PORTAL
+  LINKEDIN
+  UNKNOWN
+}
+
+enum JobStatus {
+  NEW
+  SCORED
+  TAILORED
+  APPLYING
+  NEEDS_ME
+  APPLIED
+  FAILED
+  SKIPPED
+}
+
+enum ApplicationStatus {
+  DRAFT
+  READY
+  APPLYING
+  NEEDS_ME
+  APPLIED
+  FAILED
+}
+
+model Job {
+  id              String       @id @default(cuid())
+  url             String?      @unique
+  title           String
+  company         String
+  location        String?
+  rawText         String
+  source          JobSource    @default(PASTED)
+  applyMethod     ApplyMethod  @default(UNKNOWN)
+  applyUrl        String?
+  applyEmail      String?
+  matchScore      Int?
+  matchReasoning  String?
+  /// string[]
+  keyRequirements Json?
+  status          JobStatus    @default(NEW)
+  createdAt       DateTime     @default(now())
+  updatedAt       DateTime     @updatedAt
+  application     Application?
+
+  /// Phase 2 agent polls by status, highest score first.
+  @@index([status, matchScore])
+}
+
+model Application {
+  id            String            @id @default(cuid())
+  jobId         String            @unique
+  job           Job               @relation(fields: [jobId], references: [id], onDelete: Cascade)
+  /// { summary, experience[], projects[], skills[] }
+  tailoredCv    Json
+  cvPdfPath     String?
+  status        ApplicationStatus @default(DRAFT)
+  failureReason String?
+  appliedAt     DateTime?
+  createdAt     DateTime          @default(now())
+  updatedAt     DateTime          @updatedAt
+}
+
+/// Answers to application-form questions, so the browser agent never guesses.
+model AnswerBank {
+  id           String   @id @default(cuid())
+  questionKey  String   @unique
+  questionText String
+  answer       String
+  updatedAt    DateTime @updatedAt
+}
+
+model PortalAccount {
+  id        String   @id @default(cuid())
+  domain    String   @unique
+  email     String
+  /// AES-256-GCM ciphertext ("v1:..."), encrypted by the db client extension. See src/lib/crypto.ts.
+  password  String
+  createdAt DateTime @default(now())
+}

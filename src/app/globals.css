@@ -1,0 +1,56 @@
+@import "tailwindcss";
+
+:root {
+  --background: #09090b;
+  --foreground: #f4f4f5;
+  color-scheme: dark;
+}
+
+@theme inline {
+  --color-background: var(--background);
+  --color-foreground: var(--foreground);
+  --font-sans: var(--font-arabic);
+  --font-mono: var(--font-geist-mono);
+}
+
+body {
+  background: var(--background);
+  color: var(--foreground);
+  font-family: var(--font-arabic), system-ui, sans-serif;
+}
+
+@layer components {
+  .card {
+    @apply rounded-xl border border-zinc-800 bg-zinc-900/60 p-5;
+  }
+  .section-title {
+    @apply text-sm font-semibold text-zinc-400;
+  }
+  .muted {
+    @apply text-sm text-zinc-500;
+  }
+  .field {
+    @apply block space-y-1.5 text-sm;
+  }
+  .field > span {
+    @apply text-zinc-400;
+  }
+  .input {
+    @apply w-full rounded-lg border border-zinc-800 bg-zinc-950 px-3 py-2 text-sm text-zinc-100 outline-none transition-colors placeholder:text-zinc-600 focus:border-zinc-500;
+  }
+  .btn-primary {
+    @apply rounded-lg bg-zinc-100 px-4 py-2 text-sm font-medium text-zinc-950 transition-colors hover:bg-white disabled:opacity-50;
+  }
+  .btn-ghost {
+    @apply rounded-lg border border-zinc-800 px-3 py-1.5 text-sm text-zinc-300 transition-colors hover:border-zinc-600 hover:text-white disabled:opacity-50;
+  }
+  .btn-danger {
+    @apply rounded-lg border border-zinc-800 px-3 py-1.5 text-sm text-rose-400 transition-colors hover:border-rose-900 hover:bg-rose-950/40 disabled:opacity-50;
+  }
+  .error {
+    @apply text-sm text-rose-400;
+  }
+  .success {
+    @apply text-sm text-emerald-400;
+  }
+}
