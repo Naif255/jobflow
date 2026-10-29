@@ -29,12 +29,17 @@ async function JobDetail({ params }: { params: Promise<{ id: string }> }) {
       <header className="flex items-start gap-4">
         <ScoreBadge score={job.matchScore} large />
         <div className="min-w-0 flex-1 space-y-1">
-          <h1 className="text-2xl font-semibold tracking-tight" dir="auto">
-            {job.title}
+          <h1 className="text-2xl font-semibold tracking-tight">
+            <bdi>{job.title}</bdi>
           </h1>
-          <p className="text-zinc-400" dir="auto">
-            {job.company}
-            {job.location ? ` · ${job.location}` : ""}
+          <p className="text-zinc-400">
+            <bdi>{job.company}</bdi>
+            {job.location && (
+              <>
+                {" · "}
+                <bdi>{job.location}</bdi>
+              </>
+            )}
           </p>
           <div className="flex flex-wrap items-center gap-2 pt-1 text-sm">
             <ApplyMethodBadge method={job.applyMethod} />

@@ -1,13 +1,14 @@
 "use client";
 
-import { useActionState, useEffect, useRef, useState, useTransition } from "react";
+import { useEffect, useRef, useState, useTransition } from "react";
+import { useFormAction } from "@/components/use-form-action";
 import type { FormState } from "@/app/actions";
 import { deleteAnswer, saveAnswer } from "./actions";
 
 type Answer = { id: string; questionKey: string; questionText: string; answer: string };
 
 export function AnswerForm({ initial, onDone }: { initial?: Answer; onDone?: () => void }) {
-  const [state, action, pending] = useActionState<FormState, FormData>(saveAnswer, {});
+  const { state, pending, formProps } = useFormAction<FormState>(saveAnswer, {});
   const formRef = useRef<HTMLFormElement>(null);
 
   useEffect(() => {
@@ -17,7 +18,7 @@ export function AnswerForm({ initial, onDone }: { initial?: Answer; onDone?: () 
   }, [state, onDone]);
 
   return (
-    <form ref={formRef} action={action} className="space-y-3">
+    <form ref={formRef} {...formProps} className="space-y-3">
       {initial && <input type="hidden" name="id" value={initial.id} />}
       <div className="grid gap-3 sm:grid-cols-[minmax(0,1fr)_minmax(0,2fr)]">
         <label className="field">
@@ -78,11 +79,11 @@ export function AnswerRow({ answer }: { answer: Answer }) {
   return (
     <div className="card flex items-start gap-4">
       <div className="min-w-0 flex-1 space-y-1">
-        <p className="font-mono text-xs text-zinc-500" dir="ltr">
-          {answer.questionKey}
+        <p className="font-mono text-xs text-zinc-500">
+          <bdi dir="ltr">{answer.questionKey}</bdi>
         </p>
-        <p className="font-medium" dir="auto">
-          {answer.questionText}
+        <p className="font-medium">
+          <bdi>{answer.questionText}</bdi>
         </p>
         <p className="whitespace-pre-wrap text-sm text-zinc-300" dir="auto">
           {answer.answer}

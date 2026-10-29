@@ -1,6 +1,6 @@
 "use client";
 
-import { useActionState } from "react";
+import { useFormAction } from "@/components/use-form-action";
 import { saveProfile, type FormState } from "@/app/actions";
 
 type Initial = Record<"fullName" | "email" | "phone" | "location" | "linkedinUrl" | "summary" | "content", string>;
@@ -14,10 +14,10 @@ const fields: { name: keyof Initial; label: string; type?: string; required?: bo
 ];
 
 export function ProfileForm({ initial }: { initial: Initial }) {
-  const [state, action, pending] = useActionState<FormState, FormData>(saveProfile, {});
+  const { state, pending, formProps } = useFormAction<FormState>(saveProfile, {});
 
   return (
-    <form action={action} className="space-y-4">
+    <form {...formProps} className="space-y-4">
       <div className="grid gap-4 sm:grid-cols-2">
         {fields.map((f) => (
           <label key={f.name} className="field">

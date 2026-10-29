@@ -1,13 +1,13 @@
 "use client";
 
-import { useActionState } from "react";
+import { useFormAction } from "@/components/use-form-action";
 import { addJob, type FormState } from "./actions";
 
 export function AddJobForm() {
-  const [state, action, pending] = useActionState<FormState, FormData>(addJob, {});
+  const { state, pending, formProps } = useFormAction<FormState>(addJob, {});
 
   return (
-    <form action={action} className="space-y-3">
+    <form {...formProps} className="space-y-3">
       <textarea
         name="input"
         required

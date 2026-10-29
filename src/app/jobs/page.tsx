@@ -44,12 +44,17 @@ async function JobList() {
           >
             <ScoreBadge score={job.matchScore} />
             <div className="min-w-0 flex-1">
-              <p className="truncate font-medium" dir="auto">
-                {job.title}
+              <p className="truncate font-medium">
+                <bdi>{job.title}</bdi>
               </p>
-              <p className="truncate text-sm text-zinc-400" dir="auto">
-                {job.company}
-                {job.location ? ` · ${job.location}` : ""}
+              <p className="truncate text-sm text-zinc-400">
+                <bdi>{job.company}</bdi>
+                {job.location && (
+                  <>
+                    {" · "}
+                    <bdi>{job.location}</bdi>
+                  </>
+                )}
               </p>
             </div>
             <div className="flex shrink-0 flex-col items-end gap-1 sm:flex-row sm:items-center sm:gap-2">
