@@ -10,6 +10,7 @@ import { fetchReadableText, normalizeUrl, parseUrl } from "@/lib/extract";
 import { parseProfileContent, profileForPrompt, type ProfileContent, type TailoredCv } from "@/lib/profile";
 import { verifiedSummary } from "@/lib/summary-check";
 import { renderCvPdf } from "@/lib/cv-pdf";
+import { agentInstalled, isAgentRunning, startAgent } from "@/lib/agent-runner";
 import { ApplyMethod } from "@/generated/prisma/enums";
 
 export type FormState = { error?: string; ok?: string };
@@ -215,6 +216,27 @@ export async function generateCvPdf(jobId: string): Promise<FormState> {
   } catch (err) {
     return { error: (err as Error).message };
   }
+}
+
+/** Launches agent/apply.py for this job; the page polls /jobs/[id]/agent for progress. */
+export async function startApply(jobId: string): Promise<FormState> {
+  const job = await db.job.findUnique({ where: { id: jobId }, include: { application: true } });
+  if (!job) return { error: "الوظيفة غير موجودة." };
+  if (!job.application?.cvPdfPath) return { error: "خصّص السيرة الذاتية أولاً." };
+  if (!job.applyUrl) return { error: "لا يوجد رابط تقديم لهذه الوظيفة." };
+  if (job.status === "APPLIED") return { error: "تم التقديم على هذه الوظيفة مسبقاً." };
+  if (isAgentRunning(jobId)) return { error: "الوكيل يعمل على هذه الوظيفة الآن." };
+  if (!agentInstalled()) return { error: "وكيل التقديم غير مثبّت. اتبع الخطوات في agent/README.md." };
+
+  // Flip the status now so the page shows progress before Python has connected.
+  await db.$transaction([
+    db.job.update({ where: { id: jobId }, data: { status: "APPLYING" } }),
+    db.application.update({ where: { jobId }, data: { status: "APPLYING", failureReason: null } }),
+  ]);
+  startAgent(jobId);
+  revalidatePath(`/jobs/${jobId}`);
+  revalidatePath("/jobs");
+  return { ok: "بدأ التقديم." };
 }
 
 /**

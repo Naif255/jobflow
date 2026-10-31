@@ -24,6 +24,7 @@ const nav = [
   { href: "/jobs", label: "الوظائف" },
   { href: "/profile", label: "الملف الشخصي" },
   { href: "/answers", label: "الإجابات" },
+  { href: "/accounts", label: "الحسابات" },
 ];
 
 export default function RootLayout({ children }: LayoutProps<"/">) {

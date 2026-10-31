@@ -76,22 +76,33 @@ export function AnswerRow({ answer }: { answer: Answer }) {
     );
   }
 
+  const needsAnswer = !answer.answer.trim();
+
   return (
-    <div className="card flex items-start gap-4">
+    <div className={`card flex items-start gap-4 ${needsAnswer ? "border-amber-700 bg-amber-950/20" : ""}`}>
       <div className="min-w-0 flex-1 space-y-1">
-        <p className="font-mono text-xs text-zinc-500">
+        <p className="flex flex-wrap items-center gap-2 font-mono text-xs text-zinc-500">
           <bdi dir="ltr">{answer.questionKey}</bdi>
+          {needsAnswer && (
+            <span className="rounded-full border border-amber-800 bg-amber-950/60 px-2 py-0.5 font-sans text-amber-300">
+              يحتاج إجابتك
+            </span>
+          )}
         </p>
         <p className="font-medium">
           <bdi>{answer.questionText}</bdi>
         </p>
-        <p className="whitespace-pre-wrap text-sm text-zinc-300" dir="auto">
-          {answer.answer}
-        </p>
+        {needsAnswer ? (
+          <p className="text-sm text-amber-400/80">لا توجد إجابة بعد. أضفها ليتمكن الوكيل من إكمال التقديم.</p>
+        ) : (
+          <p className="whitespace-pre-wrap text-sm text-zinc-300" dir="auto">
+            {answer.answer}
+          </p>
+        )}
       </div>
       <div className="flex shrink-0 gap-2">
-        <button type="button" onClick={() => setEditing(true)} className="btn-ghost">
-          تعديل
+        <button type="button" onClick={() => setEditing(true)} className={needsAnswer ? "btn-primary" : "btn-ghost"}>
+          {needsAnswer ? "أضف الإجابة" : "تعديل"}
         </button>
         <button
           type="button"

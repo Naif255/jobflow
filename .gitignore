@@ -46,3 +46,6 @@ next-env.d.ts
 # generated CVs and agent runs
 /storage
 /agent/runs
+/agent/.venv
+/agent/.browser-profile
+__pycache__/

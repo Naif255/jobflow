@@ -6,6 +6,7 @@ import type { TailoredCv } from "@/lib/profile";
 import { ApplyMethodBadge, ScoreBadge, StatusBadge } from "@/components/badges";
 import { TailorButton } from "./tailor-button";
 import { CvPdfButton } from "./cv-pdf-button";
+import { ApplyPanel } from "./apply-panel";
 
 export default function JobPage({ params }: PageProps<"/jobs/[id]">) {
   return (
@@ -89,6 +90,23 @@ async function JobDetail({ params }: { params: Promise<{ id: string }> }) {
         </div>
         {cv && <CvPreview cv={cv} />}
       </Section>
+
+      {job.application && (
+        <Section title="التقديم">
+          <ApplyPanel
+            jobId={job.id}
+            status={job.status}
+            failureReason={job.application.failureReason}
+            blocked={
+              !job.applyUrl
+                ? "لا يوجد رابط تقديم لهذه الوظيفة."
+                : !job.application.cvPdfPath
+                  ? "أعد تخصيص السيرة لإنشاء ملف PDF أولاً."
+                  : undefined
+            }
+          />
+        </Section>
+      )}
 
       <Section title="وصف الوظيفة">
         <details>
