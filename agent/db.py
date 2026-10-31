@@ -1,8 +1,8 @@
 """Direct access to the jobflow Postgres database (same schema Prisma manages).
 
 Reads Job, Application, MasterProfile, AnswerBank and PortalAccount, and writes
-back only run state: statuses, failureReason, appliedAt, and new AnswerBank
-questions. Prisma fills `id` and `updatedAt` client-side, so inserts and
+back only run state: statuses, failureReason, appliedAt, new AnswerBank
+questions, and the company-site apply URL found for a LinkedIn job. Prisma fills `id` and `updatedAt` client-side, so inserts and
 updates here set them explicitly.
 """
 
@@ -104,6 +104,15 @@ def set_status(
             'WHERE "jobId" = %s',
             (status, reason, applied, job_id),
         )
+
+
+def save_resolved_apply_url(conn: psycopg.Connection, job_id: str, apply_url: str, linkedin_url: str | None) -> None:
+    """Point the job at its company-site posting, keeping the first LinkedIn URL it had."""
+    conn.execute(
+        """UPDATE "Job" SET "applyUrl" = %s, "applyMethod" = 'PORTAL'::"ApplyMethod", """
+        '"linkedinUrl" = COALESCE("linkedinUrl", %s), "updatedAt" = now() WHERE id = %s',
+        (apply_url, linkedin_url, job_id),
+    )
 
 
 def save_unanswered_question(conn: psycopg.Connection, question_text: str) -> str:

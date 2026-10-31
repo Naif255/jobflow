@@ -27,7 +27,7 @@ export function AccountForm({ initial, onDone }: { initial?: Account; onDone?: (
             name="domain"
             required
             dir="ltr"
-            placeholder="linkedin.com"
+            placeholder="myworkdayjobs.com"
             defaultValue={initial?.domain}
             className="input font-mono"
           />
@@ -50,7 +50,7 @@ export function AccountForm({ initial, onDone }: { initial?: Account; onDone?: (
           />
         </label>
       </div>
-      <p className="muted text-xs">يغطي الحساب النطاق وكل نطاقاته الفرعية، فـ linkedin.com يشمل www.linkedin.com.</p>
+      <p className="muted text-xs">يغطي الحساب النطاق وكل نطاقاته الفرعية، فـ myworkdayjobs.com يشمل aramco.wd3.myworkdayjobs.com.</p>
       <div className="flex flex-wrap items-center gap-3">
         <button type="submit" disabled={pending} className="btn-primary">
           {pending ? "جارٍ الحفظ…" : initial ? "حفظ" : "إضافة"}

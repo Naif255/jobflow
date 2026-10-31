@@ -102,6 +102,9 @@ export function ApplyPanel({
               أضف الإجابة في بنك الإجابات ثم أعد التقديم
             </Link>
           )}
+          {reason.includes("Paste the direct application URL") && (
+            <p className="text-zinc-400">الصق رابط الوظيفة المباشر عبر «تعديل الرابط» أعلى الصفحة ثم أعد التقديم.</p>
+          )}
           {reason.includes("/accounts") && (
             <Link href="/accounts" className="text-sky-400 underline hover:text-sky-300">
               إدارة حسابات البوابات ثم أعد التقديم

@@ -2,6 +2,10 @@
 
     python agent/apply.py --job-id <id> [--headless] [--max-steps 60]
 
+A LinkedIn job is first looked up on the company's own careers site (see
+resolve.py), since LinkedIn shows its apply link only after a login; if the
+same posting can't be found with confidence, the run stops with NEEDS_ME.
+
 Fills the application form using only the MasterProfile, the tailored CV PDF
 and AnswerBank entries. If a PortalAccount covers the apply URL's domain it
 logs in first, once, and never signs up anywhere. Anything else (an unknown
@@ -95,6 +99,7 @@ import httpx2  # noqa: E402  (the anthropic SDK's HTTP client)
 from pydantic import BaseModel, Field  # noqa: E402
 
 import db  # noqa: E402
+import resolve  # noqa: E402
 
 
 @dataclass
@@ -209,6 +214,7 @@ L2. NEVER create an account, register or sign up, on any site, even if offered. 
 L3. Submit the password once. If the site then shows any login error (wrong email or password, account not found, locked), call stop_login_failed with the error text exactly as shown. Do not try again.
 L4. If, after the password or anywhere else, the site asks for a one-time code, a code sent by SMS or email, a two-factor step, or to confirm a device or an email address, call stop_verification_step naming that step.
 L5. If the site requires signing in and no account is stored for its domain, call stop_login_required. Do not look for another way in.
+L6. Never sign in to LinkedIn and never use "Apply with LinkedIn" or Easy Apply. If the only way to continue goes through LinkedIn, call stop_blocked with kind "other".
 
 === FORM RULES ===
 
@@ -262,6 +268,8 @@ def build_tools(outcome: Outcome, profile: dict[str, Any], answers: dict[str, di
 
     @tools.action("Type the stored account email/username for the current site into the input with this index.")
     async def enter_portal_email(index: int, page_url: str, browser_session: BrowserSession) -> ActionResult:
+        if resolve.is_linkedin(page_url):
+            return ActionResult(error="Never sign in to LinkedIn. Call stop_blocked with kind \"other\".")
         account = account_for(accounts, page_url)
         if not account:
             return ActionResult(error=f"No account is stored for {host_of(page_url)}. Call stop_login_required.")
@@ -276,6 +284,8 @@ def build_tools(outcome: Outcome, profile: dict[str, Any], answers: dict[str, di
         "Allowed once per site: a second call means the login failed."
     )
     async def enter_portal_password(index: int, page_url: str, browser_session: BrowserSession) -> ActionResult:
+        if resolve.is_linkedin(page_url):
+            return ActionResult(error="Never sign in to LinkedIn. Call stop_blocked with kind \"other\".")
         account = account_for(accounts, page_url)
         if not account:
             return ActionResult(error=f"No account is stored for {host_of(page_url)}. Call stop_login_required.")
@@ -439,6 +449,32 @@ def claude() -> ChatAnthropic:
     )
 
 
+async def resolve_linkedin_job(job: dict[str, Any], chromium: str | None) -> tuple[str | None, int]:
+    """LinkedIn shows the apply link only after a login, so apply on the company's own
+    posting instead. Returns its URL, or None and the exit code after recording why the run stopped."""
+    print(f"[jobflow] {job['applyUrl'] or 'The job'} is on LinkedIn; looking for it on {job['company']}'s own site.")
+    try:
+        result = await resolve.find_on_company_site(job, chromium)
+    except Exception as err:
+        status, reason = db.FAILED, f"Looking for the job on the company site failed: {type(err).__name__}: {err}"
+    else:
+        if isinstance(result, resolve.Found):
+            linkedin_url = next((u for u in (job["applyUrl"], job["url"]) if resolve.is_linkedin(u)), None)
+            with db.connect() as conn:
+                db.save_resolved_apply_url(conn, job["id"], result.url, linkedin_url)
+            print(f"[jobflow] Found it on the company site: {result.url}")
+            print(f"[jobflow] Confident because: {result.reason}")
+            return result.url, 0
+        status, reason = db.NEEDS_ME, (
+            f"Could not locate this job on {job['company']}'s own careers site: {result.reason}. "
+            "Paste the direct application URL on the job page, then retry."
+        )
+    with db.connect() as conn:
+        db.set_status(conn, job["id"], status, reason)
+    print(f"[jobflow] Result: {status} {reason}")
+    return None, 0 if status == db.NEEDS_ME else EXIT_FAILED
+
+
 def refuse(message: str) -> None:
     print(f"[jobflow] Refusing to run: {message}")
     sys.exit(EXIT_REFUSED)
@@ -456,7 +492,8 @@ async def run(job_id: str, headless: bool, max_steps: int, chromium: str | None)
     cv_path = REPO_ROOT / (application.get("cvPdfPath") or "")
     if not application.get("cvPdfPath") or not cv_path.is_file():
         refuse("the tailored CV has no PDF on disk; re-run tailoring in the app")
-    if not job.get("applyUrl"):
+    needs_resolving = resolve.is_linkedin(job.get("applyUrl")) or job["applyMethod"] == "LINKEDIN"
+    if not job.get("applyUrl") and not needs_resolving:
         refuse("the job has no apply URL (email applications are not handled by the agent)")
     if job["status"] == db.APPLIED:
         refuse("this job is already marked as applied")
@@ -475,8 +512,16 @@ async def run(job_id: str, headless: bool, max_steps: int, chromium: str | None)
     ]
     conn.close()
 
+    if needs_resolving:
+        with db.connect() as conn:
+            db.set_status(conn, job_id, db.APPLYING)
+        apply_url, code = await resolve_linkedin_job(job, chromium)
+        if apply_url is None:
+            return code
+    else:
+        apply_url = job["applyUrl"]
+
     # With an account for the apply URL's site, log in on its home page before opening the form.
-    apply_url = job["applyUrl"]
     login_account = account_for(accounts, apply_url)
     origin = urlparse(apply_url)
     start_url = f"{origin.scheme}://{origin.netloc}/" if login_account else apply_url

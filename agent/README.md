@@ -30,14 +30,40 @@ agent\.venv\Scripts\python agent\apply.py --job-id <id> --headless   # no window
 
 `--max-steps N` caps the number of agent steps (default 60).
 
-The job needs a tailored CV with a PDF, plus an apply URL. Without them the script
-refuses to run and changes nothing.
+The job needs a tailored CV with a PDF, plus an apply URL (or an apply method of
+LinkedIn). Without them the script refuses to run and changes nothing.
+
+## LinkedIn jobs
+
+LinkedIn shows the apply link only after a login, and the agent never signs in to
+LinkedIn. When the apply URL is on linkedin.com, or the apply method is LinkedIn, the
+agent first looks for the same job on the company's own site (`resolve.py`):
+
+1. It searches the web for the company and title. Search uses
+   [ddgs](https://pypi.org/project/ddgs/), a free metasearch library that needs no API key.
+2. It keeps results on a known ATS (Workday, Greenhouse, Lever, Ashby, SuccessFactors,
+   Taleo, SmartRecruiters, Recruitee, BambooHR) whose URL names the company, or on a
+   domain containing the company's name. Job boards are skipped.
+3. It opens each page in headless Chromium. A page whose heading matches the title is a
+   candidate. Any other page is treated as a job list, and its links whose text matches
+   the title are opened.
+4. A candidate must share at least 45% of its word 5-grams with the stored job text.
+   In testing the same posting scored 54-86% and other jobs at the same company about
+   33%. Then Claude compares the two texts (role, level, location, requirements) and
+   must call it the same posting with high confidence.
+
+When a match passes both checks, the agent saves it as `Job.applyUrl`, sets the apply
+method to Portal, keeps the old link in `Job.linkedinUrl`, logs the URL and its
+evidence, and applies there. Otherwise it stops with `NEEDS_ME`. You can then paste
+the direct link with **تعديل الرابط** on the job page and retry. The original LinkedIn
+link stays on the job page either way.
 
 ## What it writes
 
 | Outcome | Job.status / Application.status | Application.failureReason |
 | --- | --- | --- |
 | Confirmation page seen | `APPLIED` (+ `appliedAt`) | empty |
+| LinkedIn job not found on the company site, or match uncertain | `NEEDS_ME` | what was searched and the closest candidate |
 | Question it can't answer | `NEEDS_ME` | the question; it is also saved to the answer bank with an empty answer |
 | Login rejected | `NEEDS_ME` | the site's error message; never retried |
 | OTP / SMS or email code / 2FA / device confirmation | `NEEDS_ME` | the step and where the code was sent |
@@ -62,7 +88,7 @@ means the script crashed, and the app marks the job `FAILED`.
 Accounts are managed on the app's **/accounts** page. Each account has a domain, an
 email or username, and a password. The password is encrypted on save and never shown
 again; you can only replace it. An account covers its domain and every subdomain, so
-`linkedin.com` also matches `www.linkedin.com`.
+`myworkdayjobs.com` also matches `aramco.wd3.myworkdayjobs.com`.
 
 - **Login first.** If an account is stored for the apply URL's domain, the agent opens
   that site's home page and signs in (or notices it's already signed in) before it opens
@@ -91,7 +117,9 @@ again; you can only replace it. An account covers its domain and every subdomain
   `portal_login`. Sources that don't exist, or answer-bank entries that are still empty,
   are rejected. Values that differ from their source (for example a split name or a
   mapped dropdown option) are allowed but logged as `review:` lines in `log.txt`.
-- Web search, local file tools and arbitrary JavaScript are disabled.
+- The form-filling agent has no web search, local file tools or arbitrary JavaScript.
+  Only the LinkedIn lookup above searches the web, and it runs in code before the agent starts.
+- It never signs in to LinkedIn: the credential tools refuse linkedin.com pages.
 - Passwords are decrypted only inside the agent process, from the `v1:` AES-256-GCM
   format described in `src/lib/crypto.ts`.
 - browser-use telemetry and cloud sync are turned off.

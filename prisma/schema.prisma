@@ -64,6 +64,9 @@ model Job {
   source          JobSource    @default(PASTED)
   applyMethod     ApplyMethod  @default(UNKNOWN)
   applyUrl        String?
+  /// The LinkedIn URL the job came with, kept after the agent (or the user) replaces
+  /// applyUrl with the company's own posting.
+  linkedinUrl     String?
   applyEmail      String?
   matchScore      Int?
   matchReasoning  String?

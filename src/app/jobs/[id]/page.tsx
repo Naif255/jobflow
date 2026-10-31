@@ -7,6 +7,7 @@ import { ApplyMethodBadge, ScoreBadge, StatusBadge } from "@/components/badges";
 import { TailorButton } from "./tailor-button";
 import { CvPdfButton } from "./cv-pdf-button";
 import { ApplyPanel } from "./apply-panel";
+import { ApplyUrlForm } from "./apply-url-form";
 
 export default function JobPage({ params }: PageProps<"/jobs/[id]">) {
   return (
@@ -51,6 +52,11 @@ async function JobDetail({ params }: { params: Promise<{ id: string }> }) {
                 رابط التقديم
               </a>
             )}
+            {job.linkedinUrl && job.linkedinUrl !== job.applyUrl && (
+              <a href={job.linkedinUrl} target="_blank" rel="noreferrer" className={link}>
+                رابط LinkedIn الأصلي
+              </a>
+            )}
             {job.applyEmail && (
               <a href={`mailto:${job.applyEmail}`} className={link} dir="ltr">
                 {job.applyEmail}
@@ -61,6 +67,7 @@ async function JobDetail({ params }: { params: Promise<{ id: string }> }) {
                 المصدر
               </a>
             )}
+            <ApplyUrlForm jobId={job.id} applyUrl={job.applyUrl} />
           </div>
         </div>
       </header>
@@ -98,7 +105,7 @@ async function JobDetail({ params }: { params: Promise<{ id: string }> }) {
             status={job.status}
             failureReason={job.application.failureReason}
             blocked={
-              !job.applyUrl
+              !job.applyUrl && job.applyMethod !== "LINKEDIN"
                 ? "لا يوجد رابط تقديم لهذه الوظيفة."
                 : !job.application.cvPdfPath
                   ? "أعد تخصيص السيرة لإنشاء ملف PDF أولاً."

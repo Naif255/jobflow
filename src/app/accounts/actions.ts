@@ -16,7 +16,7 @@ export async function saveAccount(_prev: FormState, formData: FormData): Promise
   const email = String(formData.get("email") ?? "").trim();
   const password = String(formData.get("password") ?? "");
 
-  if (!domain) return { error: "أدخل نطاقاً صالحاً، مثل linkedin.com." };
+  if (!domain) return { error: "أدخل نطاقاً صالحاً، مثل myworkdayjobs.com." };
   if (!email) return { error: "البريد الإلكتروني أو اسم المستخدم مطلوب." };
   if (!id && !password) return { error: "كلمة المرور مطلوبة لحساب جديد." };
 

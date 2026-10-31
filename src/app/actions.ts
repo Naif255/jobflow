@@ -11,6 +11,7 @@ import { parseProfileContent, profileForPrompt, type ProfileContent, type Tailor
 import { verifiedSummary } from "@/lib/summary-check";
 import { renderCvPdf } from "@/lib/cv-pdf";
 import { agentInstalled, isAgentRunning, startAgent } from "@/lib/agent-runner";
+import { isLinkedInUrl } from "@/lib/domain";
 import { ApplyMethod } from "@/generated/prisma/enums";
 
 export type FormState = { error?: string; ok?: string };
@@ -88,6 +89,7 @@ export async function addJob(_prev: FormState, formData: FormData): Promise<Form
       ? (result.applyMethod as ApplyMethod)
       : ApplyMethod.UNKNOWN;
     const score = Math.round(Number(result.matchScore));
+    const applyUrl = result.applyUrl || (applyMethod === "EMAIL" ? null : url);
 
     const job = await db.job.create({
       data: {
@@ -98,7 +100,8 @@ export async function addJob(_prev: FormState, formData: FormData): Promise<Form
         company: result.company?.trim() || "Unknown",
         location: result.location || null,
         applyMethod,
-        applyUrl: result.applyUrl || (applyMethod === "EMAIL" ? null : url),
+        applyUrl,
+        linkedinUrl: [applyUrl, url].find(isLinkedInUrl) ?? null,
         applyEmail: result.applyEmail || null,
         matchScore: Number.isFinite(score) ? Math.min(100, Math.max(0, score)) : null,
         matchReasoning: result.matchReasoning || null,
@@ -223,7 +226,8 @@ export async function startApply(jobId: string): Promise<FormState> {
   const job = await db.job.findUnique({ where: { id: jobId }, include: { application: true } });
   if (!job) return { error: "الوظيفة غير موجودة." };
   if (!job.application?.cvPdfPath) return { error: "خصّص السيرة الذاتية أولاً." };
-  if (!job.applyUrl) return { error: "لا يوجد رابط تقديم لهذه الوظيفة." };
+  // A LinkedIn job without a link is still looked up on the company site by the agent.
+  if (!job.applyUrl && job.applyMethod !== "LINKEDIN") return { error: "لا يوجد رابط تقديم لهذه الوظيفة." };
   if (job.status === "APPLIED") return { error: "تم التقديم على هذه الوظيفة مسبقاً." };
   if (isAgentRunning(jobId)) return { error: "الوكيل يعمل على هذه الوظيفة الآن." };
   if (!agentInstalled()) return { error: "وكيل التقديم غير مثبّت. اتبع الخطوات في agent/README.md." };
@@ -237,6 +241,33 @@ export async function startApply(jobId: string): Promise<FormState> {
   revalidatePath(`/jobs/${jobId}`);
   revalidatePath("/jobs");
   return { ok: "بدأ التقديم." };
+}
+
+/**
+ * Lets the user paste the direct posting when the agent can't find it on the
+ * company site. The first LinkedIn URL the job had is kept in linkedinUrl.
+ */
+export async function updateApplyUrl(jobId: string, _prev: FormState, formData: FormData): Promise<FormState> {
+  const parsed = parseUrl(String(formData.get("applyUrl") ?? ""));
+  if (!parsed) return { error: "أدخل رابطاً صالحاً يبدأ بـ https://" };
+  if (isAgentRunning(jobId)) return { error: "الوكيل يعمل على هذه الوظيفة الآن." };
+
+  const job = await db.job.findUnique({ where: { id: jobId }, select: { applyUrl: true, url: true, linkedinUrl: true } });
+  if (!job) return { error: "الوظيفة غير موجودة." };
+
+  const applyUrl = parsed.toString();
+  await db.job.update({
+    where: { id: jobId },
+    data: {
+      applyUrl,
+      applyMethod: isLinkedInUrl(applyUrl) ? "LINKEDIN" : "PORTAL",
+      linkedinUrl: job.linkedinUrl ?? [job.applyUrl, job.url, applyUrl].find(isLinkedInUrl) ?? null,
+    },
+  });
+
+  revalidatePath(`/jobs/${jobId}`);
+  revalidatePath("/jobs");
+  return { ok: "تم حفظ رابط التقديم." };
 }
 
 /**
