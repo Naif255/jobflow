@@ -5,6 +5,7 @@ import { db } from "@/lib/db";
 import type { TailoredCv } from "@/lib/profile";
 import { ApplyMethodBadge, ScoreBadge, StatusBadge } from "@/components/badges";
 import { TailorButton } from "./tailor-button";
+import { CvPdfButton } from "./cv-pdf-button";
 
 export default function JobPage({ params }: PageProps<"/jobs/[id]">) {
   return (
@@ -82,7 +83,10 @@ async function JobDetail({ params }: { params: Promise<{ id: string }> }) {
       )}
 
       <Section title="السيرة الذاتية المخصصة">
-        <TailorButton jobId={job.id} hasCv={Boolean(cv)} />
+        <div className="flex flex-wrap items-start gap-3">
+          <TailorButton jobId={job.id} hasCv={Boolean(cv)} />
+          {job.application && <CvPdfButton jobId={job.id} />}
+        </div>
         {cv && <CvPreview cv={cv} />}
       </Section>
 

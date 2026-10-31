@@ -1,5 +1,7 @@
 "use server";
 
+import { mkdir, writeFile } from "node:fs/promises";
+import path from "node:path";
 import { redirect } from "next/navigation";
 import { revalidatePath } from "next/cache";
 import { db } from "@/lib/db";
@@ -7,6 +9,7 @@ import { callAI } from "@/lib/ai";
 import { fetchReadableText, normalizeUrl, parseUrl } from "@/lib/extract";
 import { parseProfileContent, profileForPrompt, type ProfileContent, type TailoredCv } from "@/lib/profile";
 import { verifiedSummary } from "@/lib/summary-check";
+import { renderCvPdf } from "@/lib/cv-pdf";
 import { ApplyMethod } from "@/generated/prisma/enums";
 
 export type FormState = { error?: string; ok?: string };
@@ -169,6 +172,8 @@ export async function tailorCv(jobId: string): Promise<FormState> {
       }),
       db.job.update({ where: { id: jobId }, data: { status: "TAILORED" } }),
     ]);
+    // Keep the PDF in step with the tailored CV so the agent never uploads a stale one.
+    await writeCvPdf(jobId);
   } catch (err) {
     return { error: (err as Error).message };
   }
@@ -176,6 +181,40 @@ export async function tailorCv(jobId: string): Promise<FormState> {
   revalidatePath(`/jobs/${jobId}`);
   revalidatePath("/jobs");
   return { ok: "تم تخصيص السيرة الذاتية." };
+}
+
+/** Relative to the project root, so the Python agent resolves the same file. */
+const cvPdfPathFor = (jobId: string) => `storage/cv/${jobId}.pdf`;
+
+async function writeCvPdf(jobId: string): Promise<{ pages: number }> {
+  const [application, profile] = await Promise.all([
+    db.application.findUnique({ where: { jobId } }),
+    db.masterProfile.findFirst(),
+  ]);
+  if (!application) throw new Error("خصّص السيرة الذاتية أولاً.");
+  if (!profile) throw new Error("أنشئ ملفك الشخصي أولاً.");
+
+  const { pdf, pages } = await renderCvPdf(
+    profile,
+    parseProfileContent(profile.content),
+    application.tailoredCv as TailoredCv,
+  );
+  const cvPdfPath = cvPdfPathFor(jobId);
+  const file = path.join(process.cwd(), cvPdfPath);
+  await mkdir(path.dirname(file), { recursive: true });
+  await writeFile(file, pdf);
+  await db.application.update({ where: { jobId }, data: { cvPdfPath } });
+  return { pages };
+}
+
+export async function generateCvPdf(jobId: string): Promise<FormState> {
+  try {
+    const { pages } = await writeCvPdf(jobId);
+    revalidatePath(`/jobs/${jobId}`);
+    return pages === 1 ? { ok: "تم إنشاء ملف PDF." } : { ok: `تم إنشاء ملف PDF، لكنه تجاوز صفحة واحدة (${pages} صفحات).` };
+  } catch (err) {
+    return { error: (err as Error).message };
+  }
 }
 
 /**

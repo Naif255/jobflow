@@ -42,3 +42,7 @@ next-env.d.ts
 
 # prisma
 /src/generated/prisma
+
+# generated CVs and agent runs
+/storage
+/agent/runs
