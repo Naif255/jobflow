@@ -684,6 +684,8 @@ async def wait_for_human(assist: Assist, outcome: Outcome, browser: BrowserSessi
                 "maxAttempts": MAX_ASSISTS,
                 "since": time.strftime("%Y-%m-%dT%H:%M:%S%z"),
                 "pid": os.getpid(),
+                # Lets the app drop this file if the process dies without removing it.
+                "timeoutSeconds": timeout,
             },
             ensure_ascii=False,
         ),

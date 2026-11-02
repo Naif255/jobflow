@@ -121,7 +121,9 @@ Each run writes to `agent/runs/<job-id>/`, which is replaced on the next run:
 - `log.txt`: the full agent log
 - `step-NN.png`: a screenshot after each step
 - `final.png`: the page when the run ended
-- `waiting.json`: present only while the agent waits for you; the job page reads it
+- `waiting.json`: present only while the agent waits for you; the job page reads it.
+  If the agent's process is gone, or the pause is past its timeout, the app deletes it
+  instead, and a dead run's job is marked `FAILED`
 
 Exit codes: `0` applied or needs-me, `2` refused, `3` failure recorded. Anything else
 means the script crashed, and the app marks the job `FAILED`.
