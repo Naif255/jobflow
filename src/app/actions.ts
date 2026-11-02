@@ -10,7 +10,7 @@ import { fetchReadableText, normalizeUrl, parseUrl } from "@/lib/extract";
 import { parseProfileContent, profileForPrompt, type ProfileContent, type TailoredCv } from "@/lib/profile";
 import { verifiedSummary } from "@/lib/summary-check";
 import { renderCvPdf } from "@/lib/cv-pdf";
-import { agentInstalled, isAgentRunning, startAgent } from "@/lib/agent-runner";
+import { agentInstalled, agentWaiting, isAgentRunning, resumeAgent, startAgent } from "@/lib/agent-runner";
 import { isLinkedInUrl } from "@/lib/domain";
 import { ApplyMethod } from "@/generated/prisma/enums";
 
@@ -241,6 +241,13 @@ export async function startApply(jobId: string): Promise<FormState> {
   revalidatePath(`/jobs/${jobId}`);
   revalidatePath("/jobs");
   return { ok: "بدأ التقديم." };
+}
+
+/** Tells an agent paused for a CAPTCHA, OTP or login that the user is done in the browser. */
+export async function continueApply(jobId: string): Promise<FormState> {
+  if (!(await agentWaiting(jobId))) return { error: "الوكيل لا ينتظرك الآن." };
+  await resumeAgent(jobId);
+  return { ok: "يتابع الوكيل الآن." };
 }
 
 /**

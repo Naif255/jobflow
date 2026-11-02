@@ -3,21 +3,31 @@
 import Link from "next/link";
 import { useActionState, useEffect, useState } from "react";
 import { useRouter } from "next/navigation";
-import { startApply, type FormState } from "@/app/actions";
+import { continueApply, startApply, type FormState } from "@/app/actions";
 import { StatusBadge } from "@/components/badges";
+import type { AgentWaiting } from "@/lib/agent-runner";
 
-type Live = { status: string; failureReason: string | null; running: boolean; log: string[] };
+type Live = {
+  status: string;
+  failureReason: string | null;
+  running: boolean;
+  waiting: AgentWaiting | null;
+  log: string[];
+};
 
 /** Starts the browser agent and follows its progress until it leaves APPLYING. */
 export function ApplyPanel({
   jobId,
   status,
   failureReason,
+  waiting: initialWaiting,
   blocked,
 }: {
   jobId: string;
   status: string;
   failureReason: string | null;
+  /** A human-assist pause already in progress when the page loaded. */
+  waiting: AgentWaiting | null;
   /** Why applying isn't possible yet, if it isn't. */
   blocked?: string;
 }) {
@@ -28,6 +38,7 @@ export function ApplyPanel({
   const current = live?.status ?? status;
   const reason = live ? live.failureReason : failureReason;
   const applying = current === "APPLYING";
+  const waiting = applying ? (live ? live.waiting : initialWaiting) : null;
 
   useEffect(() => {
     if (!applying) return;
@@ -73,9 +84,13 @@ export function ApplyPanel({
         {state.error && <p className="error">{state.error}</p>}
       </form>
 
+      {waiting && <WaitingNotice jobId={jobId} waiting={waiting} />}
+
       {applying && (
         <div className="space-y-2">
-          <p className="text-sm text-zinc-400">نافذة المتصفح مفتوحة والوكيل يملأ النموذج. يتحدث هذا القسم تلقائياً.</p>
+          {!waiting && (
+            <p className="text-sm text-zinc-400">نافذة المتصفح مفتوحة والوكيل يملأ النموذج. يتحدث هذا القسم تلقائياً.</p>
+          )}
           {live && live.log.length > 0 && (
             <pre
               dir="ltr"
@@ -121,6 +136,34 @@ export function ApplyPanel({
           </bdi>
         </p>
       )}
+    </div>
+  );
+}
+
+/** The agent is paused with the browser open until the user handles the step and continues. */
+function WaitingNotice({ jobId, waiting }: { jobId: string; waiting: AgentWaiting }) {
+  const [state, action, pending] = useActionState<FormState>(() => continueApply(jobId), {});
+  return (
+    <div className="space-y-2 rounded-lg border border-amber-700 bg-amber-950/40 p-3 text-sm">
+      <p className="font-medium text-amber-300">
+        في انتظارك في المتصفح{" "}
+        <span className="text-xs font-normal text-zinc-400">
+          (محاولة {waiting.attempt} من {waiting.maxAttempts})
+        </span>
+      </p>
+      <p dir="ltr" className="text-zinc-300">
+        {waiting.reason}
+      </p>
+      <p dir="ltr" className="text-zinc-400">
+        {waiting.todo}
+      </p>
+      <form action={action} className="flex flex-wrap items-center gap-3 pt-1">
+        <button type="submit" disabled={pending} className="btn-primary">
+          متابعة
+        </button>
+        <p className="muted text-xs">بعد إنهاء الخطوة في نافذة المتصفح اضغط «متابعة» هنا أو Enter في الطرفية.</p>
+        {state.error && <p className="error">{state.error}</p>}
+      </form>
     </div>
   );
 }

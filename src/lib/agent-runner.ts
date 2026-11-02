@@ -1,7 +1,7 @@
 import "server-only";
 import { spawn, type ChildProcess } from "node:child_process";
 import { existsSync } from "node:fs";
-import { readFile } from "node:fs/promises";
+import { readFile, writeFile } from "node:fs/promises";
 import path from "node:path";
 import { db } from "@/lib/db";
 
@@ -67,3 +67,25 @@ export async function agentLogTail(jobId: string, lines = 8): Promise<string[]> 
 }
 
 export const agentInstalled = () => existsSync(agentPython());
+
+/** A human-assist pause in progress: apply.py writes waiting.json while it waits for the user. */
+export type AgentWaiting = { reason: string; todo: string; attempt: number; maxAttempts: number; since: string };
+
+const runDir = (jobId: string) => {
+  // Job ids are cuids; refuse anything that could leave agent/runs/.
+  if (!/^[A-Za-z0-9_-]+$/.test(jobId)) throw new Error(`Invalid job id: ${jobId}`);
+  return path.join(AGENT_DIR, "runs", jobId);
+};
+
+export async function agentWaiting(jobId: string): Promise<AgentWaiting | null> {
+  try {
+    return JSON.parse(await readFile(path.join(runDir(jobId), "waiting.json"), "utf8")) as AgentWaiting;
+  } catch {
+    return null;
+  }
+}
+
+/** Same as pressing Enter in the agent's terminal; works for runs started from the app or a terminal. */
+export async function resumeAgent(jobId: string): Promise<void> {
+  await writeFile(path.join(runDir(jobId), "resume"), "");
+}

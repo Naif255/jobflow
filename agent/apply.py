@@ -1,6 +1,6 @@
 """Apply to one job with a real browser.
 
-    python agent/apply.py --job-id <id> [--headless] [--max-steps 60]
+    python agent/apply.py --job-id <id> [--headless] [--no-assist] [--max-steps 60]
 
 A LinkedIn job is first looked up on the company's own careers site (see
 resolve.py), since LinkedIn shows its apply link only after a login; if the
@@ -8,10 +8,12 @@ same posting can't be found with confidence, the run stops with NEEDS_ME.
 
 Fills the application form using only the MasterProfile, the tailored CV PDF
 and AnswerBank entries. If a PortalAccount covers the apply URL's domain it
-logs in first, once, and never signs up anywhere. Anything else (an unknown
-question, rejected login, OTP, CAPTCHA, a login wall without a stored account)
-stops the run with status NEEDS_ME. Screenshots and the full log go to
-agent/runs/<job-id>/.
+logs in first, once, and never signs up anywhere. An unknown question stops the
+run with status NEEDS_ME. A step only a human can pass (CAPTCHA, OTP or other
+verification, a login wall or rejected login) pauses the run with the browser
+open until you press Enter; the agent then re-checks the page and carries on.
+With --no-assist or --headless those steps stop the run with NEEDS_ME instead.
+Screenshots and the full log go to agent/runs/<job-id>/.
 """
 
 
@@ -21,6 +23,8 @@ import json
 import os
 import re
 import sys
+import threading
+import time
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any, TextIO
@@ -34,6 +38,12 @@ MODEL = "anthropic/claude-sonnet-4.5"
 # Anything else is a crash; the app's launcher then marks the job FAILED.
 EXIT_REFUSED = 2
 EXIT_FAILED = 3
+
+# Human-assist pauses. While the agent waits, WAITING_FILE in the run folder describes the pause
+# for the job page. The page's continue button creates RESUME_FILE, which counts as pressing Enter.
+WAITING_FILE = "waiting.json"
+RESUME_FILE = "resume"
+MAX_ASSISTS = 3
 
 
 class Tee:
@@ -68,8 +78,8 @@ def start_run_dir(job_id: str) -> Path:
         sys.exit(f"Invalid job id: {job_id!r}")
     run_dir = AGENT_DIR / "runs" / job_id
     run_dir.mkdir(parents=True, exist_ok=True)
-    for old in run_dir.glob("*.png"):
-        old.unlink()
+    for old in [*run_dir.glob("*.png"), run_dir / WAITING_FILE, run_dir / RESUME_FILE]:
+        old.unlink(missing_ok=True)
     log = open(run_dir / "log.txt", "w", encoding="utf-8", buffering=1)
     sys.stdout = Tee(sys.stdout, log)
     sys.stderr = Tee(sys.stderr, log)
@@ -81,6 +91,17 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--job-id", required=True)
     parser.add_argument("--headless", action="store_true", help="run without a visible browser window")
     parser.add_argument("--max-steps", type=int, default=60)
+    parser.add_argument(
+        "--no-assist",
+        action="store_true",
+        help="stop with NEEDS_ME at a CAPTCHA, OTP or login wall instead of waiting for you (unattended runs)",
+    )
+    parser.add_argument(
+        "--assist-timeout",
+        type=float,
+        default=30,
+        help="minutes to wait for you at each pause before stopping with NEEDS_ME (default 30)",
+    )
     return parser.parse_args()
 
 
@@ -103,12 +124,24 @@ import resolve  # noqa: E402
 
 
 @dataclass
+class Assist:
+    """A step only a human can pass. The tool that hits it records it here, and the wait happens
+    in on_step_end, which browser-use runs outside its per-step timeout."""
+
+    key: str  # kind of blocker and site; each key gets at most MAX_ASSISTS waits
+    reason: str  # recorded as the NEEDS_ME reason if the waits run out
+    todo: str  # what the human has to do in the browser
+
+
+@dataclass
 class Outcome:
     status: str | None = None
     reason: str | None = None
     verified: bool = False
     # Account domains whose password has been typed once; a second attempt is refused.
     password_typed: set[str] = field(default_factory=set)
+    pending_assist: Assist | None = None
+    assist_counts: dict[str, int] = field(default_factory=dict)
 
 
 class FormField(BaseModel):
@@ -220,10 +253,11 @@ L6. Never sign in to LinkedIn and never use "Apply with LinkedIn" or Easy Apply.
 
 1. NEVER GUESS. Every value you enter must come from the PROFILE or the ANSWER BANK. Allowed: reformatting (splitting the full name, date formats, phone format) and choosing the dropdown/radio option that means the same as a stored answer. Not allowed: inferring, estimating, or reusing an answer to a different question.
 2. If any form field, required or optional, asks for something the data above does not answer (including a cover letter, salary, availability, demographic or "how did you hear about us" questions), immediately call stop_unanswerable_question with the field's question text exactly as shown on the page. Do not fill it, skip it, or submit.
-3. CAPTCHA: call stop_blocked with kind "captcha". Never attempt to solve one.
+3. CAPTCHA: call stop_blocked with kind "captcha". Never attempt to solve one, and never click, type into or otherwise touch a CAPTCHA widget, not even its checkbox.
 4. Before clicking the final submit button, call verify_before_submit listing EVERY field you filled, with its source. Click submit only after it returns OK.
 5. After submitting, once the page confirms the application was received, call mark_submitted with the confirmation text. If submission shows validation errors, fix them using the allowed data or stop per rule 2.
 6. Finish only through stop_unanswerable_question, stop_login_failed, stop_verification_step, stop_login_required, stop_blocked or mark_submitted. If something else makes the application impossible (job closed, page broken), call done with success=false and explain why.
+7. A human may take over the browser after stop_login_failed, stop_verification_step, stop_login_required or stop_blocked. If such a call returns instead of ending the run, look at the page again and continue the application from where it is now. Do not restart the flow or reopen the apply URL. If the same blocker is still there, call the same tool again.
 """
 
 
@@ -258,13 +292,94 @@ async def type_secret(browser_session: BrowserSession, index: int, text: str, ke
     return None
 
 
-def build_tools(outcome: Outcome, profile: dict[str, Any], answers: dict[str, dict[str, str]], accounts: list[db.PortalAccount]) -> Tools:
-    tools = Tools(exclude_actions=EXCLUDED_ACTIONS)
+# CAPTCHA widgets render inside an iframe served by the provider, so a frame from one of these
+# hosts marks everything in it. Matching the word "captcha" anywhere up the tree or in the page
+# URL is too broad: it blocked the plain email field on iCIMS's CAPTCHA-protected login page.
+CAPTCHA_FRAME_URL = re.compile(
+    r"^https?://([^/]*\.)?(hcaptcha\.com|recaptcha\.net|challenges\.cloudflare\.com|arkoselabs\.com|funcaptcha\.com)/"
+    r"|^https?://(www\.)?google\.com/recaptcha/",
+    re.I,
+)
+# The widget's own elements on the host page: the response fields and the container divs.
+CAPTCHA_ELEMENT = re.compile(r"^(h-captcha|g-recaptcha|cf-turnstile)(-response)?$", re.I)
+# Actions aimed at a page element; none of them may reach a CAPTCHA widget.
+ELEMENT_ACTIONS = {"click", "input", "send_keys", "select_dropdown", "dropdown_options", "upload_file"}
+
+
+def in_captcha(node: Any, browser_session: BrowserSession) -> bool:
+    """True if the element is a CAPTCHA widget or sits inside a CAPTCHA provider's iframe.
+    The parent chain runs through iframes (browser-use links each iframe's document to its
+    <iframe> element); a cross-origin frame's own URL is checked as well."""
+    attrs = node.attributes or {}
+    if any(CAPTCHA_ELEMENT.match(v) for k in ("name", "id", "class") for v in attrs.get(k, "").split()):
+        return True
+    while node is not None:
+        if node.node_name.upper() == "IFRAME" and CAPTCHA_FRAME_URL.match((node.attributes or {}).get("src", "")):
+            return True
+        if node.target_id != browser_session.agent_focus_target_id:
+            try:
+                target = browser_session.session_manager.get_target(node.target_id)
+                if target and CAPTCHA_FRAME_URL.match(getattr(target, "url", "") or ""):
+                    return True
+            except Exception:
+                pass
+        node = node.parent_node
+    return False
+
+
+class FormTools(Tools):
+    """Refuses, in code, any action on a CAPTCHA widget. Coordinate clicks stay off (browser-use
+    turns them on for Claude) so every click names an element this check can inspect."""
+
+    def set_coordinate_clicking(self, enabled: bool) -> None:
+        super().set_coordinate_clicking(False)
+
+    async def act(self, action: Any, browser_session: BrowserSession, *args: Any, **kwargs: Any) -> ActionResult:
+        for name, params in action.model_dump(exclude_unset=True).items():
+            index = params.get("index") if isinstance(params, dict) else None
+            if name not in ELEMENT_ACTIONS or index is None:
+                continue
+            try:
+                node = await browser_session.get_element_by_index(index)
+            except Exception:
+                node = None
+            if node is not None and in_captcha(node, browser_session):
+                print(f"[jobflow] Refused {name} on element {index}: it is part of a CAPTCHA.")
+                return ActionResult(
+                    error='That element is part of a CAPTCHA. Never interact with a CAPTCHA; call stop_blocked with kind "captcha".'
+                )
+        return await super().act(action, browser_session, *args, **kwargs)
+
+
+def build_tools(
+    outcome: Outcome,
+    profile: dict[str, Any],
+    answers: dict[str, dict[str, str]],
+    accounts: list[db.PortalAccount],
+    assist: bool,
+) -> Tools:
+    tools = FormTools(exclude_actions=EXCLUDED_ACTIONS)
 
     def stop(status: str, reason: str) -> ActionResult:
         outcome.status, outcome.reason = status, reason
         print(f"[jobflow] {reason}")
         return ActionResult(is_done=True, success=False, extracted_content=reason)
+
+    def needs_human(key: str, reason: str, todo: str) -> ActionResult:
+        """Hand the step to the human (the wait runs in on_step_end), or stop with NEEDS_ME when
+        assist is off or this blocker has already had its MAX_ASSISTS waits."""
+        if not assist:
+            return stop(db.NEEDS_ME, reason)
+        waited = outcome.assist_counts.get(key, 0)
+        if waited >= MAX_ASSISTS:
+            return stop(db.NEEDS_ME, f"{reason} (still there after waiting for you {waited} times)")
+        outcome.pending_assist = Assist(key, reason, todo)
+        return ActionResult(
+            extracted_content="The run is paused and a human is handling this in the browser. When your next "
+            "step starts, look at the page again. If the blocker is gone, continue the application from the "
+            "current page without restarting. If it is still there, call the same tool again.",
+            long_term_memory=f"Paused for a human: {reason}",
+        )
 
     @tools.action("Type the stored account email/username for the current site into the input with this index.")
     async def enter_portal_email(index: int, page_url: str, browser_session: BrowserSession) -> ActionResult:
@@ -305,32 +420,46 @@ def build_tools(outcome: Outcome, profile: dict[str, Any], answers: dict[str, di
         print(f"[jobflow] Typed the stored password for {account.domain}")
         return ActionResult(extracted_content=f"Typed the stored password for {account.domain}. Submit the login form once.")
 
-    @tools.action("Stop because the site rejected the login. Pass the error message exactly as shown.")
+    @tools.action(
+        "Stop because the site rejected the login. Pass the error message exactly as shown.",
+        terminates_sequence=True,
+    )
     async def stop_login_failed(error_message: str, page_url: str) -> ActionResult:
+        host = host_of(page_url)
         account = account_for(accounts, page_url)
-        where = account.domain if account else host_of(page_url)
-        return stop(
-            db.NEEDS_ME,
-            f'Login to {host_of(page_url)} failed ("{error_message.strip()}"). Not retried; '
-            f"check the {where} account at /accounts.",
+        where = account.domain if account else host
+        return needs_human(
+            f"login_failed:{host}",
+            f'Login to {host} failed ("{error_message.strip()}"). Not retried; check the {where} account at /accounts.',
+            f"Sign in to {host} yourself in the browser window.",
         )
 
     @tools.action(
         "Stop because the site asks for a one-time code, SMS or email code, two-factor step, or device/email "
-        "confirmation. Name the step and say where the code was sent if shown."
+        "confirmation. Name the step and say where the code was sent if shown.",
+        terminates_sequence=True,
     )
     async def stop_verification_step(step: str, explanation: str, page_url: str) -> ActionResult:
-        return stop(db.NEEDS_ME, f"Verification needed on {host_of(page_url)} ({step.strip()}): {explanation.strip()}")
+        host = host_of(page_url)
+        return needs_human(
+            f"verification:{host}",
+            f"Verification needed on {host} ({step.strip()}): {explanation.strip()}",
+            f"Complete the {step.strip()} in the browser window (enter the code and confirm it).",
+        )
 
-    @tools.action("Stop because the site requires signing in and no account is stored for its domain.")
+    @tools.action(
+        "Stop because the site requires signing in and no account is stored for its domain.",
+        terminates_sequence=True,
+    )
     async def stop_login_required(explanation: str, page_url: str) -> ActionResult:
         host = host_of(page_url)
         if account_for(accounts, page_url):
             return ActionResult(error=f"An account is stored for {host}; sign in with enter_portal_email and enter_portal_password.")
-        return stop(
-            db.NEEDS_ME,
+        return needs_human(
+            f"login_required:{host}",
             f"{host} requires signing in and no account is stored for it. Add one at /accounts, then retry. "
             f"({explanation.strip()})",
+            f"Sign in to {host} yourself in the browser window.",
         )
 
     @tools.action(
@@ -344,10 +473,17 @@ def build_tools(outcome: Outcome, profile: dict[str, Any], answers: dict[str, di
 
     @tools.action(
         "Stop because the site needs a human for something other than login or verification: "
-        "kind is captcha or other. Explain exactly what is blocking."
+        "kind is captcha or other. Explain exactly what is blocking.",
+        terminates_sequence=True,
     )
-    async def stop_blocked(kind: str, explanation: str) -> ActionResult:
-        return stop(db.NEEDS_ME, f"Blocked ({kind}): {explanation.strip()}")
+    async def stop_blocked(kind: str, explanation: str, page_url: str) -> ActionResult:
+        kind = kind.strip().lower()
+        todo = (
+            "Solve the CAPTCHA in the browser window yourself. Leave the rest of the form to the agent."
+            if kind == "captcha"
+            else f"In the browser window: {explanation.strip()}"
+        )
+        return needs_human(f"{kind}:{host_of(page_url)}", f"Blocked ({kind}): {explanation.strip()}", todo)
 
     @tools.action(
         "Call before clicking the final submit button, listing every field you filled with its source.",
@@ -475,12 +611,117 @@ async def resolve_linkedin_job(job: dict[str, Any], chromium: str | None) -> tup
     return None, 0 if status == db.NEEDS_ME else EXIT_FAILED
 
 
+class ResumeSignal:
+    """Fires when Enter is pressed in the terminal or the job page creates RUN_DIR/resume.
+
+    stdin is read on a daemon thread so the browser keeps running while we wait. When the app
+    launches the agent, stdin is the null device: the first read hits EOF and the thread ends,
+    leaving the job page's button as the only way to continue."""
+
+    def __init__(self, loop: asyncio.AbstractEventLoop):
+        self.loop = loop
+        self.entered = asyncio.Event()
+        threading.Thread(target=self._read_stdin, daemon=True).start()
+
+    def _read_stdin(self) -> None:
+        try:
+            while sys.stdin and sys.stdin.readline():
+                self.loop.call_soon_threadsafe(self.entered.set)
+        except (OSError, ValueError):
+            pass
+
+    async def wait(self, timeout: float) -> str | None:
+        """How the human resumed ("Enter" or "the job page"), or None on timeout."""
+        resume_file = RUN_DIR / RESUME_FILE
+        resume_file.unlink(missing_ok=True)
+        self.entered.clear()  # ignore Enter presses from before this pause
+        deadline = time.monotonic() + timeout
+        while time.monotonic() < deadline:
+            if self.entered.is_set():
+                return "Enter"
+            if resume_file.exists():
+                resume_file.unlink(missing_ok=True)
+                return "the job page"
+            try:
+                await asyncio.wait_for(self.entered.wait(), timeout=0.5)
+            except TimeoutError:
+                pass
+        return None
+
+
+async def bring_to_front(browser: BrowserSession) -> None:
+    """Un-minimize the browser window and raise the agent's tab. Windows may only flash the
+    taskbar button instead of stealing focus from the terminal."""
+    try:
+        cdp = await browser.get_or_create_cdp_session()
+        # Browser.* commands go to the root connection, not the page's session.
+        window = await browser.cdp_client.send.Browser.getWindowForTarget(params={"targetId": cdp.target_id})
+        await browser.cdp_client.send.Browser.setWindowBounds(
+            params={"windowId": window["windowId"], "bounds": {"windowState": "normal"}}
+        )
+        await cdp.cdp_client.send.Page.bringToFront(session_id=cdp.session_id)
+    except Exception as err:  # focus is a convenience; never fail the run over it
+        print(f"[jobflow] Could not bring the browser to the front: {err}")
+
+
+def format_duration(seconds: float) -> str:
+    minutes, secs = divmod(round(seconds), 60)
+    return f"{minutes}m {secs:02d}s" if minutes else f"{secs}s"
+
+
+async def wait_for_human(assist: Assist, outcome: Outcome, browser: BrowserSession, signal: ResumeSignal, timeout: float) -> bool:
+    """Pause with the browser open until the human resumes. Returns False if nobody did in time,
+    after recording NEEDS_ME on the outcome."""
+    attempt = outcome.assist_counts[assist.key] = outcome.assist_counts.get(assist.key, 0) + 1
+    await bring_to_front(browser)
+    waiting_file = RUN_DIR / WAITING_FILE
+    waiting_file.write_text(
+        json.dumps(
+            {
+                "reason": assist.reason,
+                "todo": assist.todo,
+                "attempt": attempt,
+                "maxAttempts": MAX_ASSISTS,
+                "since": time.strftime("%Y-%m-%dT%H:%M:%S%z"),
+                "pid": os.getpid(),
+            },
+            ensure_ascii=False,
+        ),
+        encoding="utf-8",
+    )
+    rule = "=" * 72
+    print(
+        f"\n{rule}\n"
+        f"[jobflow] WAITING FOR YOU in the browser ({attempt}/{MAX_ASSISTS})\n"
+        f"[jobflow] Why: {assist.reason}\n"
+        f"[jobflow] Do this: {assist.todo}\n"
+        f"[jobflow] Then press Enter here, or press \"متابعة\" on the job page, and the agent continues from this page.\n"
+        f"[jobflow] Waiting up to {format_duration(timeout)}.\n"
+        f"{rule}"
+    )
+    started = time.monotonic()
+    try:
+        how = await signal.wait(timeout)
+    finally:
+        waiting_file.unlink(missing_ok=True)
+    waited = format_duration(time.monotonic() - started)
+    if how is None:
+        print(f"[jobflow] Assist pause {attempt}/{MAX_ASSISTS} timed out after {waited}.")
+        outcome.status = db.NEEDS_ME
+        outcome.reason = f"{assist.reason} (nobody responded within {waited})"
+        return False
+    print(f"[jobflow] Assist pause {attempt}/{MAX_ASSISTS} ended after {waited} ({how}); re-checking the page.")
+    return True
+
+
 def refuse(message: str) -> None:
     print(f"[jobflow] Refusing to run: {message}")
     sys.exit(EXIT_REFUSED)
 
 
-async def run(job_id: str, headless: bool, max_steps: int, chromium: str | None) -> int:
+async def run(
+    job_id: str, headless: bool, max_steps: int, chromium: str | None, assist: bool, assist_timeout: float
+) -> int:
     # Short-lived connections only: a run can take minutes and Neon drops idle connections.
     conn = db.connect()
     job = db.load_job(conn, job_id)
@@ -533,10 +774,16 @@ async def run(job_id: str, headless: bool, max_steps: int, chromium: str | None)
         if login_account
         else f"[jobflow] No stored account for {host_of(apply_url)}; opening the apply URL directly."
     )
+    print(
+        "[jobflow] Human assist is on: at a CAPTCHA, OTP or login wall the browser stays open and waits for you."
+        if assist
+        else "[jobflow] Human assist is off: a CAPTCHA, OTP or login wall stops the run with NEEDS_ME."
+    )
     with db.connect() as conn:
         db.set_status(conn, job_id, db.APPLYING)
 
     outcome = Outcome()
+    signal = ResumeSignal(asyncio.get_running_loop()) if assist else None
     if not chromium:
         print("[jobflow] Playwright Chromium not found; letting browser-use pick a browser.")
     browser = Browser(
@@ -556,7 +803,7 @@ async def run(job_id: str, headless: bool, max_steps: int, chromium: str | None)
         ),
         llm=claude(),
         browser=browser,
-        tools=build_tools(outcome, profile, answers, accounts),
+        tools=build_tools(outcome, profile, answers, accounts, assist),
         # Open the start page ourselves; browser-use would otherwise jump to the first URL in the task.
         directly_open_url=False,
         initial_actions=[{"navigate": {"url": start_url, "new_tab": False}}],
@@ -573,6 +820,11 @@ async def run(job_id: str, headless: bool, max_steps: int, chromium: str | None)
     async def on_step_end(a: Agent) -> None:
         # n_steps has already advanced to the next step when this hook runs.
         await screenshot(f"step-{a.state.n_steps - 1:02d}")
+        # Pauses run here rather than inside the tool: browser-use cancels a step after 180 s.
+        if outcome.pending_assist and signal:
+            pending, outcome.pending_assist = outcome.pending_assist, None
+            if not await wait_for_human(pending, outcome, browser, signal, assist_timeout * 60):
+                a.stop()
 
     try:
         history = await agent.run(max_steps=max_steps, on_step_end=on_step_end)
@@ -602,4 +854,10 @@ async def run(job_id: str, headless: bool, max_steps: int, chromium: str | None)
 
 if __name__ == "__main__":
     # Playwright's sync API refuses to run inside an event loop, so resolve the browser first.
-    sys.exit(asyncio.run(run(args.job_id, args.headless, args.max_steps, playwright_chromium())))
+    # A headless browser can't be handed to a human, so it never waits.
+    assist = not (args.no_assist or args.headless)
+    sys.exit(
+        asyncio.run(
+            run(args.job_id, args.headless, args.max_steps, playwright_chromium(), assist, args.assist_timeout)
+        )
+    )

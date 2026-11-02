@@ -2,6 +2,7 @@ import { Suspense } from "react";
 import { notFound } from "next/navigation";
 import { connection } from "next/server";
 import { db } from "@/lib/db";
+import { agentWaiting } from "@/lib/agent-runner";
 import type { TailoredCv } from "@/lib/profile";
 import { ApplyMethodBadge, ScoreBadge, StatusBadge } from "@/components/badges";
 import { TailorButton } from "./tailor-button";
@@ -104,6 +105,7 @@ async function JobDetail({ params }: { params: Promise<{ id: string }> }) {
             jobId={job.id}
             status={job.status}
             failureReason={job.application.failureReason}
+            waiting={job.status === "APPLYING" ? await agentWaiting(job.id) : null}
             blocked={
               !job.applyUrl && job.applyMethod !== "LINKEDIN"
                 ? "لا يوجد رابط تقديم لهذه الوظيفة."

@@ -1,5 +1,5 @@
 import { db } from "@/lib/db";
-import { agentLogTail, isAgentRunning } from "@/lib/agent-runner";
+import { agentLogTail, agentWaiting, isAgentRunning } from "@/lib/agent-runner";
 
 /** Live agent status for the job page to poll. */
 export async function GET(_request: Request, { params }: { params: Promise<{ id: string }> }) {
@@ -15,6 +15,8 @@ export async function GET(_request: Request, { params }: { params: Promise<{ id:
       status: job.status,
       failureReason: job.application?.failureReason ?? null,
       running: isAgentRunning(id),
+      // A leftover file from a crashed run means nothing once the job has left APPLYING.
+      waiting: job.status === "APPLYING" ? await agentWaiting(id) : null,
       log: await agentLogTail(id),
     },
     { headers: { "Cache-Control": "no-store" } },
